@@ -2,13 +2,13 @@ import streamlit as st
 from supabase import create_client, Client
 import os
 
-# Only use st.secrets for configuration
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets.get("SUPABASE_SERVICE_ROLE_KEY")
-if not SUPABASE_KEY:
-    st.error("SUPABASE_SERVICE_ROLE_KEY is missing from your secrets! Please add it to .streamlit/secrets.toml or Streamlit Cloud secrets.")
-    raise RuntimeError("SUPABASE_SERVICE_ROLE_KEY is missing from your secrets!")
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+@st.cache_resource
+def get_supabase_client():
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets.get("SUPABASE_SERVICE_ROLE_KEY")
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+supabase = get_supabase_client()
 
 # Add this at the top of the file
 try:
@@ -29,34 +29,17 @@ def login():
     pwd = st.text_input("Password", type="password", key="login_pwd")
     if st.button("Login"):
         try:
-            res = supabase.auth.sign_in_with_password({"email": email, "password": pwd})
-            if res.user:
-                try:
-                    profile_result = supabase.table("profiles").select("is_admin").eq("id", res.user.id).execute()
-                    if profile_result.data:
-                        st.session_state.profile = profile_result.data[0]
-                    else:
-                        profile_data = {"id": res.user.id, "is_admin": is_admin(res.user.email)}
-                        supabase.table("profiles").insert(profile_data).execute()
-                        st.session_state.profile = profile_data
-                        # st.info("📝 Profile created for new user")
-                except Exception as profile_error:
-                    try:
-                        profile_data = {"id": res.user.id, "is_admin": is_admin(res.user.email)}
-                        supabase.table("profiles").insert(profile_data).execute()
-                        st.session_state.profile = profile_data
-                    except Exception as create_error:
-                        st.error(f"❌ Could not create profile: {create_error}")
-                        st.session_state.profile = {"is_admin": False}
-                        return  # Ensure nothing after this runs if profile creation fails
-                # Only set session state and show success if profile creation succeeded
-                st.session_state.user = res.user
-                st.session_state.session = res.session
-                st.session_state.user_email = res.user.email  # Ensure user_email is set for main_app
+            # Query the profiles table for a matching email and password
+            result = supabase.table("profiles").select("id, email, is_admin").eq("email", email).eq("password", pwd).execute()
+            if result.data and len(result.data) > 0:
+                user_profile = result.data[0]
+                st.session_state.user = user_profile["id"]
+                st.session_state.user_email = user_profile["email"]
+                st.session_state.profile = {"is_admin": user_profile.get("is_admin", False)}
                 st.success("✅ Logged in")
-                st.rerun()  # Immediately rerun to show main_app
+                st.rerun()
             else:
-                st.error("❌ Login failed")
+                st.error("❌ Login failed. Please check your credentials.")
         except Exception as e:
             st.error(f"❌ Login error: {e}")
 
@@ -66,32 +49,17 @@ def signup():
     pwd = st.text_input("Password", type="password", key="su_pwd")
     if st.button("Sign Up"):
         try:
-            res = supabase.auth.sign_up({"email": email, "password": pwd})
-            if res.user:
-                import time
-                time.sleep(1)
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        profile_data = {"id": res.user.id, "is_admin": is_admin(res.user.email)}
-                        supabase.table("profiles").insert(profile_data).execute()
-                        st.success("✅ Account created successfully!")
-                        st.info("📧 Please check your email and confirm your account before logging in.")
-                        break
-                    except Exception as profile_error:
-                        if attempt < max_retries - 1:
-                            st.info(f"⏳ Waiting for user account to be ready... (attempt {attempt + 1}/{max_retries})")
-                            time.sleep(2)
-                            continue
-                        else:
-                            st.warning("⚠️ Account created but profile setup failed.")
-                            st.error(f"Profile error: {profile_error}")
-                            st.info("🔧 To fix this issue:")
-                            st.markdown("Try signing up again!")
-                            st.info("📧 Please check your email and confirm your account before logging in.")
-                            break
-            else:
-                st.error("❌ Sign-up error")
+            # Check if email already exists
+            existing = supabase.table("profiles").select("id").eq("email", email).execute()
+            if existing.data and len(existing.data) > 0:
+                st.error("❌ Email already registered. Please log in or use another email.")
+                return
+            # Insert new profile with email and password
+            import uuid
+            user_id = str(uuid.uuid4())
+            profile_data = {"id": user_id, "email": email, "password": pwd, "is_admin": is_admin(email)}
+            supabase.table("profiles").insert(profile_data).execute()
+            st.success("✅ Account created successfully! You can now log in.")
         except Exception as e:
             st.error(f"❌ Sign-up error: {e}")
 
@@ -116,4 +84,12 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
 

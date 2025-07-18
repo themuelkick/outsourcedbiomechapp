@@ -5,3 +5,5 @@ plotly
 supabase
 python-dotenv
 requests
+httpx
+
